@@ -1,0 +1,7 @@
+venv/
+.idea/
+test_data/
+
+*.ipynb_checkpoints
+*.py[cod]
+*.log
