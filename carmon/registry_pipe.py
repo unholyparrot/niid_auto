@@ -7,10 +7,10 @@
 import yaml
 import pandas as pd
 
-from . import constants
+from . import common
 
 
-with open(f"{constants.WORKING_PATH}/registry_pipe_settings.yaml", "r", encoding="utf-8") as fr:
+with open(f"{common.WORKING_PATH}/registry_pipe_settings.yaml", "r", encoding="utf-8") as fr:
     REGISTRY_PIPE_SETTINGS = yaml.load(fr, Loader=yaml.SafeLoader)
 
 
@@ -23,7 +23,7 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
     :param separator: разделитель данных в текстовых файлах;
     :return: словарь вида STATE, payload - DataFrame с пересечением таблиц в случае успеха
     """
-    response = constants.DEFAULT_RESPONSE.copy()
+    response = common.DEFAULT_RESPONSE.copy()
     try:
         df2 = pd.read_csv(table_2_path, sep=separator, dtype=str)
         df3 = pd.read_csv(table_3_path, sep=separator, dtype=str)
@@ -47,7 +47,7 @@ def read_all_registry_info(table_path: str) -> dict:
     :param table_path: путь к текстовому (по-умолчанию csv) файлу таблицы;
     :return: словарь вида STATE, payload - DataFrame с информацией о реестрах в случае успеха.
     """
-    response = constants.DEFAULT_RESPONSE.copy()
+    response = common.DEFAULT_RESPONSE.copy()
     try:
         df = pd.read_csv(table_path, dtype=str)
     except Exception as e:
@@ -81,7 +81,7 @@ def append_desired_columns(pd_table: pd.DataFrame) -> dict:
     :param pd_table: таблица для расширения;
     :return: словарь вида STATE, payload - DataFrame с обновленными колонками в случае успеха
     """
-    response = constants.DEFAULT_RESPONSE.copy()
+    response = common.DEFAULT_RESPONSE.copy()
     try:
         pd_table["region_code"] = pd_table["region"].apply(lambda x: create_regions_short_name(x))
         for col_heading in REGISTRY_PIPE_SETTINGS['appending_columns']:
@@ -103,7 +103,7 @@ def process_table_concatenation(pd_table: pd.DataFrame, pd_registry: pd.DataFram
     :param pd_registry: полная таблица реестров;
     :return: словарь вида STATE, payload - DataFrame с обновленными данными в случае успеха.
     """
-    response = constants.DEFAULT_RESPONSE.copy()
+    response = common.DEFAULT_RESPONSE.copy()
     try:
         # здесь было бы хорошо добавить tqdm для оценки времени работы, но, так как это будет импортироваться,
         # я не хочу загрязнять потенциальные логи чужой консоли, обойдемся без индикатора прогресса
@@ -154,26 +154,5 @@ def process_table_concatenation(pd_table: pd.DataFrame, pd_registry: pd.DataFram
     else:
         response['success'] = True
         response['payload'] = pd_table
-
-    return response
-
-
-# TODO: необходимо уточнить, что именно выступает в качестве payload в случае успеха этой функции
-def save_concatenated_table(pd_table, output_name, separator='\t'):
-    """
-    Функция для сохранения сборной таблицы по указанному пути \n \n
-    :param pd_table: таблица для сохранения;
-    :param output_name: путь и имя для итогового файла;
-    :param separator: разделитель в текстовом файле;
-    :return: словарь вида STATE, payload - путь к сохраненному файлу в случае успеха.
-    """
-    response = constants.DEFAULT_RESPONSE.copy()
-    try:
-        pd_table.to_csv(output_name, sep=separator)
-    except Exception as e:
-        response['payload'] = str(e)
-    else:
-        response['success'] = True
-        response['payload'] = f"Успешно сохранено в `{output_name}`"
 
     return response

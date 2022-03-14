@@ -5,3 +5,5 @@ test_data/
 *.ipynb_checkpoints
 *.py[cod]
 *.log
+*.zip
+*.7z
