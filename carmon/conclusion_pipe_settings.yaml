@@ -4,3 +4,30 @@ access:
 paths:
   base: "https://genome.crie.ru/"
   ping: "departs/current"
+  conclusion_types: "result-info/get-result-types"
+  samples_info: "list/page-items"
+  state_res: "result-info/save-package"
+conclusions:
+  vga_conclusion_types:
+    Alpha: 461014
+    AT.1: 497466
+    B.1.1.523: 461012
+    Beta: 461015
+    Delta: 461011
+    'Eta ': 9
+    Gamma: 7
+    'Iota ': 10
+    Kappa: 6
+    Lambda: 12
+    Omicron: 24
+    Omicron (BA.1): 38
+    Omicron (BA.2): 43
+    Иной: 4
+    недостаточное покрытие: 460927
+  local:
+    'BA.1.1|21K (Omicron)': 'Omicron (BA.1)'
+    'BA.1|21K (Omicron)': 'Omicron (BA.1)'
+    'BA.2|21L (Omicron)': 'Omicron (BA.2)'
+    'AY.122|21J (Delta)': 'Delta'
+table: ['pango', 'nextclade', 'result', 'true_id', 'status']
+
