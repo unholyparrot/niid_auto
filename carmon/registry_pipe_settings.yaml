@@ -1,3 +1,11 @@
+column_names:
+  from_2: ["Sample_name", "Source_plate_name", "Aspirate_from", "Destination_plate_name", "Dispence_to", "Volume"]
+  from_3: ["litech_barcode", "litech_sample_name", "litech_region", "litech_rna_pool", "litech_registry_guess"]
+  registry: ['registry_id', 'depart_name', 'sample_number', 'value']
+  total: ["barcode", "litech_barcode", "litech_sample_name", "litech_region", "region_short_name",
+          "registry_id", "depart_name", "sample_number", "sample_name_value", "registry_guess_status",
+          "valid_seq", "sample_status_local", "sample_vga_id", "sample_status_remote", "pango", "nextclade",
+          "sequence_conclusion_local", "sequence_vga_id", "sequence_conclusion_remote"]
 region_renames:  # может (и будет) дополняться, сюда размещаем соответствие между
                  # именем в таблице Литеха и сокращением с VGARus
   Костромская область: kost
@@ -21,4 +29,3 @@ region_renames:  # может (и будет) дополняться, сюда �
   Брянская область: brya
   Свердловская область: sver
   ХМАО: HMAO
-appending_columns: [registry_id, depart_name, sample_number, value, status]
