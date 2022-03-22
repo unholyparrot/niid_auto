@@ -34,7 +34,7 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
         barcodes_dict = {x: y for x, y in zip(df2["Sample_name"], barcodes)}
         df3 = pd.read_csv(table_3_path,
                           sep=separator, dtype=str, encoding="utf-8",
-                          names=REGISTRY_PIPE_SETTINGS["column_names"]["from_2"])
+                          names=REGISTRY_PIPE_SETTINGS["column_names"]["from_3"])
         df_res = df3[df3["litech_barcode"].isin(df2["Sample_name"])].copy(deep=True)
     except Exception as e:
         response['payload'] = str(e)

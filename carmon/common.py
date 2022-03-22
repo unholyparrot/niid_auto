@@ -38,7 +38,7 @@ def save_concatenated_table(pd_table, output_name, separator='\t'):
     response = DEFAULT_RESPONSE.copy()
     try:
         # обязательно пишем все в utf-8, чтобы не было в дальнейшем проблем
-        pd_table.to_csv(output_name, sep=separator, encoding="utf-8")
+        pd_table.to_csv(output_name, sep=separator, encoding="utf-8", index=False)
     except Exception as e:
         response['payload'] = str(e)
     else:
