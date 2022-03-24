@@ -3,6 +3,7 @@
 """
 import yaml
 import requests
+import pandas as pd
 
 from os.path import split as split_it
 
@@ -24,6 +25,19 @@ default_settings = load_config(f"{WORKING_PATH}/common_settings.yaml")
 
 DEFAULT_RESPONSE = default_settings['default_response']
 BASE_URL = default_settings['paths']['base']
+
+
+def read_df(table_path: str, separator="\t") -> dict:
+    response = DEFAULT_RESPONSE.copy()
+    try:
+        df = pd.read_csv(table_path, sep=separator, dtype=str, keep_default=False)
+    except Exception as e:
+        response['payload'] = str(e)
+    else:
+        response['success'] = True
+        response['payload'] = df
+
+    return response
 
 
 # TODO: необходимо уточнить, что именно выступает в качестве payload в случае успеха этой функции
