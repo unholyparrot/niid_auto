@@ -1,6 +1,7 @@
 """
 Раздел, отвечающий за проставление статуса результатам
 """
+import base64
 import json
 
 import pandas as pd
@@ -68,12 +69,11 @@ def state_sample_status_local(df: pd.DataFrame, fasta_path: str) -> dict:
         for barcode in df.index:
             if df.loc[barcode, 'valid_seq']:  # если последовательность валидная
                 # Проверяем, что там по реестру последовательности, т.к. иначе не сможем загрузить
-                if (df.loc[barcode, 'registry_guess_status'] == "OK") or (
-                        df.loc[barcode, 'registry_guess_status'] == "ALMOST OK"):
+                if df.loc[barcode, 'registry_guess_status'] == "OK":
                     df.loc[barcode, 'sample_status_local'] = 'Готов'
                 else:  # если с реестром проблемы, то объявляем об этом в локальном заключении
                     # проставляем такой статус, чтобы можно было в дальнейшем взаимодействовать с этим вручную
-                    df.loc[barcode, 'sample_status_local'] = 'NOT READY'
+                    df.loc[barcode, 'sample_status_local'] = 'Требуется подтверждение'
             else:  # если последовательность невалидная, то проставляем 'Брак сиквенса'
                 df.loc[barcode, 'sample_status_local'] = 'Брак сиквенса'
     except Exception as e:
@@ -97,7 +97,7 @@ def request_samples_info(df: pd.DataFrame, increment: int = 40):
     try:
         # тут хитрый момент, мы запрашиваем ID лишь для тех образцов,
         # которые были определены как подходящие для выставления хоть какого-то статуса
-        sub_df = df[df["sample_status_local"].isin(SAMPLE_STATUS_DICT["status"])]
+        sub_df = df[df["sample_status_local"].isin(set(SAMPLE_STATUS_DICT["status"]["vga_status_types"]))]
         barcodes = sub_df.index.tolist()
         idx = 0
         # станем итерироваться по increment образцов
@@ -142,25 +142,107 @@ def request_samples_info(df: pd.DataFrame, increment: int = 40):
     return response
 
 
-def upload_sequence(df: pd.DataFrame, fasta_upload: dict, credentials: dict) -> dict:
+def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict) -> dict:
     """
-    Загрузка сиквенсов на сервер. \n \n
+    Загрузка сиквенсов на сервер. Выбирает из TABLE те записи, для которых локальный статус выставлен
+    'Готов'. Не совершает никаких действий с теми образцами, что имеют иные статусы. \n \n
     :return:
     """
     response = common.DEFAULT_RESPONSE.copy()
+    token = base64.b64encode(f"{credentials['login']}:{credentials['password']}".encode()).decode()
+    special_headers = {
+        "Authorization": f"Basic {token}",
+        "Content-Type": "application/json"
+    }
+    operation_status = True
+    for barcode in df.index:
+        if df.loc[barcode, 'sample_status_local'] == 'Готов':
+            try:
+                # тут, вообще говоря, надо подумать, как все красиво спихнуть в конфигурацию
+                single_sample = {
+                    'sample_number': df.loc[barcode, 'sample_number'],
+                    'sample_data': {
+                        'sequence_name': df.loc[barcode, 'litech_barcode'],
+                        'sample_type': '1',
+                        'seq_area': '1',
+                        'author': 'Говорун В.М.',
+                        'genom_pick_method': 'nf_artic',
+                        'method_ready_lib': 'MIDNIGHT',
+                        'tech': '3',
+                        'valid': True,
+                        'seq_id': df.loc[barcode, 'sample_name_value']
+                    },
+                    'sequence': f">DEZIN-{df.loc[barcode, 'litech_barcode']}\n{fasta_upload.get(barcode)}"
+                }
+                single_upload = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["upload"],
+                                              headers=special_headers,
+                                              data=json.dumps(single_sample))
+                if single_upload.status_code == 200:
+                    df.loc[barcode, 'sample_status_remote'] = 'Uploaded'
+                else:
+                    df.loc[barcode, 'sample_status_remote'] = f"Failed with {single_upload.status_code}"
+                    operation_status = False
+            # возникшие ошибки обрабатываем
+            except Exception as e:
+                df.loc[barcode, 'sample_status_remote'] = f"Failed with {str(e)}"
+                operation_status = False
+
+    response['success'] = operation_status
+    response['payload'] = df
 
     return response
 
 
-def state_sample_status_remote(df: pd.DataFrame, increment: int = 40) -> dict:
+def state_sample_status_remote(df: pd.DataFrame, increment: int = 40, status: str = 'Брак сиквенса') -> dict:
     """
-    Отправка локальных статусов образцов на сервер.
+    Отправка локальных статусов STATUS образцов на сервер.
     :return:
     """
     response = common.DEFAULT_RESPONSE.copy()
-    # сперва проставляем значения "брак сиквенса"
 
-    # затем загружаем сиквенсы и проставляем "Готов" для тех, кого удалось загрузить
+    try:
+        if status not in set(SAMPLE_STATUS_DICT["status"]["vga_status_types"]):
+            raise AssertionError(f"Неизвестный статус `{status}`")
+        sub_df = df[df['sample_status_local'] == status]
+        barcodes = sub_df.index.tolist()
+        idx = 0
+        # станем итерироваться по increment образцов
+        while idx < len(barcodes):
+            # получаем срез списка имен образцов
+            concatenated_sample_numbers = sub_df.loc[barcodes[idx:idx + increment], 'sample_number'].tolist()
+            # отправляем статус образцов POST-запросом
+            status_change = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["status_change"],
+                                          headers=common.default_settings["access"]["headers"],
+                                          files={
+                                              "uploads": (None, ",".join(map(str, concatenated_sample_numbers))),
+                                              "status": (None, str(SAMPLE_STATUS_DICT["status"]["vga_status_types"])),
+                                              "defect_id": (None, ''),
+                                              "auth_key": (None, common.default_settings["access"]["token"])
+                                          })
+            # если запрос прошел корректно, то обрабатываем результаты
+            if status_change.status_code == 200:
+                # в ответе должно быть True\False
+                if status_change.json():
+                    # если все ок, то записываем это в результат выставления
+                    df.loc[barcodes, 'sample_status_remote'] = "Проставлено"
+                else:
+                    raise AssertionError(f"Не удалось выставить статус для {idx}:{idx + increment}")
+            # если запрос обработать не удалось, то также поднимаем ошибку
+            else:
+                raise AssertionError(f"Request for {idx}:{idx + increment} failed with {status_change.status_code}")
+            # после успешной итерации увеличиваем счетчик
+            idx += increment
+        # проверяем, всем ли из выбранных образцов удалось проставить статус
+        cur_counter = sub_df[sub_df['sample_status_remote'] == ""].shape[0]
+        if cur_counter != 0:
+            raise AssertionError(f"Как минимум одному ({cur_counter}) образцу не удалось выставить статус")
+    # возникшие ошибки обрабатываем
+    except Exception as e:
+        response['payload'] = str(e)
+    else:
+        response['success'] = True
+        response['payload'] = df
+
     return response
 
 
