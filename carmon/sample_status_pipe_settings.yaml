@@ -1,7 +1,8 @@
 paths:
   status_types: "status/get-upload-statuses"
+  samples_info: "samples/work-sample-items"
   status_change: "status/set-upload-status"
-  upload: "/api/v1/import/refilling-sample"
+  upload: "api/v1/import/refilling-sample"
 status:
   vga_status_types:
     'Новый': 1

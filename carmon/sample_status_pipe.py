@@ -14,7 +14,7 @@ from . import common
 SAMPLE_STATUS_DICT = common.load_config(f"{common.WORKING_PATH}/sample_status_pipe_settings.yaml")
 
 
-def request_sample_status_types():
+def request_sample_status_types() -> dict:
     response = common.DEFAULT_RESPONSE.copy()
     try:
         vga_request = requests.get(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["status_types"],
@@ -25,7 +25,7 @@ def request_sample_status_types():
         if vga_request.status_code == 200:
             comparison_dict = dict()
             for elem in vga_request.json():
-                comparison_dict[elem['text']] = elem['value']
+                comparison_dict[elem['text']] = elem['id']
             if comparison_dict == SAMPLE_STATUS_DICT["status"]["vga_status_types"]:
                 response['success'] = True
                 response['payload'] = comparison_dict
@@ -35,7 +35,7 @@ def request_sample_status_types():
                 response['payload'] = comparison_dict
         else:
             response['payload'] = f"{vga_request.status_code}: {vga_request.text}`"
-    pass
+    return response
 
 
 def state_sample_status_local(df: pd.DataFrame, fasta_path: str) -> dict:
@@ -75,7 +75,12 @@ def state_sample_status_local(df: pd.DataFrame, fasta_path: str) -> dict:
                     # проставляем такой статус, чтобы можно было в дальнейшем взаимодействовать с этим вручную
                     df.loc[barcode, 'sample_status_local'] = 'Требуется подтверждение'
             else:  # если последовательность невалидная, то проставляем 'Брак сиквенса'
-                df.loc[barcode, 'sample_status_local'] = 'Брак сиквенса'
+                # Проверяем, что там по реестру последовательности, т.к. иначе не сможем поставить статус
+                if df.loc[barcode, 'registry_guess_status'] == "OK":
+                    df.loc[barcode, 'sample_status_local'] = 'Брак сиквенса'
+                else:  # если с реестром проблемы, то объявляем об этом в локальном заключении
+                    # проставляем такой статус, чтобы можно было в дальнейшем взаимодействовать с этим вручную
+                    df.loc[barcode, 'sample_status_local'] = 'Требуется подтверждение'
     except Exception as e:
         response['payload'] = str(e)
     else:
@@ -105,17 +110,15 @@ def request_samples_info(df: pd.DataFrame, increment: int = 40):
             # получаем срез списка имен образцов
             concatenated_sample_numbers = sub_df.loc[barcodes[idx:idx+increment], 'sample_number'].tolist()
             # запрашиваем информацию об образцах POST-запросом
-            samples_info = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["status_types"],
+            samples_info = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["samples_info"],
                                          headers=common.default_settings["access"]["headers"],
-                                         data={
-                                             json.dumps({"filter": concatenated_sample_numbers})
-                                         })
+                                         data=json.dumps({"filter": concatenated_sample_numbers}))
             # если запрос прошел корректно, то обрабатываем результаты
             if samples_info.status_code == 200:
                 for row in samples_info.json():
                     # получаем имена образцов и сравниваем их с уже записанными,
                     # чтобы убедиться в корректной последовательности образцов в ответе сервера
-                    ali_index = df[df['sample_number'] == row['sample_number']].index
+                    ali_index = df[df['sample_number'] == row['sample']['sample_number']].index
                     # каждому образцу должен соответствовать лишь один
                     if len(ali_index) == 1:
                         df.loc[ali_index, 'sample_vga_id'] = row['id']
@@ -129,6 +132,7 @@ def request_samples_info(df: pd.DataFrame, increment: int = 40):
             # после успешной итерации увеличиваем счетчик
             idx += increment
         # проверяем, все ли из выбранных образцов получили свои ID
+        sub_df = df[df["sample_status_local"].isin(set(SAMPLE_STATUS_DICT["status"]["vga_status_types"]))]
         cur_counter = sub_df[sub_df['sample_vga_id'] == ""].shape[0]
         if cur_counter != 0:
             raise AssertionError(f"Как минимум один ({cur_counter}) из образцов не получил id с портала")
@@ -170,17 +174,18 @@ def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict) ->
                         'method_ready_lib': 'MIDNIGHT',
                         'tech': '3',
                         'valid': True,
-                        'seq_id': df.loc[barcode, 'sample_name_value']
+                        'seq_id': df.loc[barcode, 'sample_name_value']  # опциональный параметр
                     },
                     'sequence': f">DEZIN-{df.loc[barcode, 'litech_barcode']}\n{fasta_upload.get(barcode)}"
                 }
                 single_upload = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["upload"],
                                               headers=special_headers,
-                                              data=json.dumps(single_sample))
+                                              data=json.dumps([single_sample]))
                 if single_upload.status_code == 200:
                     df.loc[barcode, 'sample_status_remote'] = 'Uploaded'
                 else:
-                    df.loc[barcode, 'sample_status_remote'] = f"Failed with {single_upload.status_code}"
+                    df.loc[barcode, 'sample_status_remote'] = f"Failed with " \
+                                                              f"{single_upload.status_code}:{single_upload.text}"
                     operation_status = False
             # возникшие ошибки обрабатываем
             except Exception as e:
@@ -209,13 +214,14 @@ def state_sample_status_remote(df: pd.DataFrame, increment: int = 40, status: st
         # станем итерироваться по increment образцов
         while idx < len(barcodes):
             # получаем срез списка имен образцов
-            concatenated_sample_numbers = sub_df.loc[barcodes[idx:idx + increment], 'sample_number'].tolist()
+            concatenated_sample_ids = sub_df.loc[barcodes[idx:idx + increment], 'sample_vga_id'].tolist()
             # отправляем статус образцов POST-запросом
             status_change = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["status_change"],
                                           headers=common.default_settings["access"]["headers"],
                                           files={
-                                              "uploads": (None, ",".join(map(str, concatenated_sample_numbers))),
-                                              "status": (None, str(SAMPLE_STATUS_DICT["status"]["vga_status_types"])),
+                                              "uploads": (None, ",".join(map(str, concatenated_sample_ids))),
+                                              "status": (None,
+                                                         str(SAMPLE_STATUS_DICT["status"]["vga_status_types"][status])),
                                               "defect_id": (None, ''),
                                               "auth_key": (None, common.default_settings["access"]["token"])
                                           })
@@ -229,10 +235,12 @@ def state_sample_status_remote(df: pd.DataFrame, increment: int = 40, status: st
                     raise AssertionError(f"Не удалось выставить статус для {idx}:{idx + increment}")
             # если запрос обработать не удалось, то также поднимаем ошибку
             else:
-                raise AssertionError(f"Request for {idx}:{idx + increment} failed with {status_change.status_code}")
+                raise AssertionError(f"Request for {idx}:{idx + increment} failed with " +
+                                     f"{status_change.status_code}:{status_change.text}")
             # после успешной итерации увеличиваем счетчик
             idx += increment
         # проверяем, всем ли из выбранных образцов удалось проставить статус
+        sub_df = df[df['sample_status_local'] == status]
         cur_counter = sub_df[sub_df['sample_status_remote'] == ""].shape[0]
         if cur_counter != 0:
             raise AssertionError(f"Как минимум одному ({cur_counter}) образцу не удалось выставить статус")
@@ -246,6 +254,7 @@ def state_sample_status_remote(df: pd.DataFrame, increment: int = 40, status: st
     return response
 
 
+# TODO: реализовать проверку успеха загрузки и выставления статусов
 def check_sample_status_success():
     """
     Првоерка корректности выставления статусов образцов. \n \n

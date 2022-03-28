@@ -30,7 +30,9 @@ BASE_URL = default_settings['paths']['base']
 def read_df(table_path: str, separator="\t") -> dict:
     response = DEFAULT_RESPONSE.copy()
     try:
-        df = pd.read_csv(table_path, sep=separator, dtype=str, keep_default=False)
+        df = pd.read_csv(table_path,
+                         sep=separator, dtype=str,
+                         keep_default_na=False, encoding="utf-8").set_index('barcode')
     except Exception as e:
         response['payload'] = str(e)
     else:
@@ -52,7 +54,7 @@ def save_concatenated_table(pd_table, output_name, separator='\t'):
     response = DEFAULT_RESPONSE.copy()
     try:
         # обязательно пишем все в utf-8, чтобы не было в дальнейшем проблем
-        pd_table.to_csv(output_name, sep=separator, encoding="utf-8", index=False)
+        pd_table.to_csv(output_name, sep=separator, encoding="utf-8")
     except Exception as e:
         response['payload'] = str(e)
     else:
