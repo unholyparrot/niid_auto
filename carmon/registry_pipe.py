@@ -12,6 +12,9 @@ from . import common
 REGISTRY_PIPE_SETTINGS = common.load_config(f"{common.WORKING_PATH}/registry_pipe_settings.yaml")
 
 
+# TODO: table_2 -- проверка уникальности 'Sample_name', иначе AssertionError
+# TODO: table_3 -- проверка уникальности 'litech_barcode', иначе AssertionError
+# TODO: table_3 -- проверка уникальности 'litech_sample_name', иначе уведомление в статусе и остановка обработки образца
 def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> dict:
     """
     Функция для загрузки в память входных таблиц, с которыми ведется работа.
@@ -58,6 +61,7 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
     return response
 
 
+# TODO: переписывание и добавление функции сбора информации по всем реестрам
 def read_all_registry_info(table_path: str) -> dict:
     """
     Считывание и проверка наименований столбцов таблицы, содержащей полную информацию о всех доступных реестрах.
@@ -120,7 +124,7 @@ def append_desired_columns(df: pd.DataFrame) -> dict:
             else:
                 future_df[heading] = ["" for _ in range(df.index.size)]
         # создаем итоговую таблицу вида TABLE
-        df_res = pd.DataFrame(future_df)
+        df_res = pd.DataFrame(future_df).set_index('barcode')  # устанавливаем баркод в качестве индекса
     except Exception as e:
         response['payload'] = str(e)
     # если не случилось исключений, то возвращаем её целиком
@@ -131,6 +135,7 @@ def append_desired_columns(df: pd.DataFrame) -> dict:
     return response
 
 
+# TODO: обновить алгоритм угадывания реестра в соответствии с предположениями в столбце 'litech_registry_guess'
 def process_table_concatenation(df: pd.DataFrame, df_registry: pd.DataFrame) -> dict:
     """
     Функция для поиска номера реестра среди всех реестров на основе наивного поиска подстроки в строке,
