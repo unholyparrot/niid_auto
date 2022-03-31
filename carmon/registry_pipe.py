@@ -3,8 +3,12 @@
 и внутренним таблица из Google Sheets.
 Представленному разделу соответствует `registry_pipe_settings.yaml` с некоторыми константами, а также
 ноутбук registry_pipe_example.ipynb в качестве образца работы.
+NB: все функции, производящие манипуляции с DataFrame, делают их inplace, то есть возвращаются не копии.
 """
+import concurrent.futures
+
 import pandas as pd
+import requests
 
 from . import common
 
@@ -61,7 +65,64 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
     return response
 
 
-# TODO: переписывание и добавление функции сбора информации по всем реестрам
+def single_registry_request(registry_id):
+    """
+    Производит запрос информации по 'registry_id' реестру. Функция может использоваться как циклично, так и для
+    конкурентных запросов. \n \n
+    :param registry_id: ID реестра для запроса.
+    :return: request в сыром виде
+    """
+    lil_request = requests.get(common.BASE_URL + REGISTRY_PIPE_SETTINGS["paths"]["registry_query"] + str(registry_id),
+                               headers=common.default_settings["access"]["headers"])
+    return lil_request
+
+
+def update_registry_info(path_registry_table: str) -> dict:
+    """
+    Функция для запроса таблицы соответствия образцов реестрам. Использует конкурентные запросы. Для успешной работы
+    необходимо предварительное объявление токена через раздел common. Работает медленно, но все же быстрее, чем обычный
+    запрос через цикл. \n \n
+    :param path_registry_table: путь для сохранения таблицы реестров.
+    :return: словарь вида STATE, payload - DataFrame соответствия образцов реестрам
+    """
+    response = common.DEFAULT_RESPONSE.copy()
+    try:
+        # В первую очередь запрашиваем весь список реестров
+        registries_list = requests.get(common.BASE_URL + REGISTRY_PIPE_SETTINGS["paths"]["get_registries_list"],
+                                       headers=common.default_settings["access"]["headers"])
+        if registries_list.ok:
+            # если удалось запросить список реестров, то начинаем запрашивать реестры по одному
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                res = [executor.submit(single_registry_request, elem['registry_id']) for elem in registries_list.json()]
+                concurrent.futures.wait(res)
+            # просто копируем чужой код, чтобы не парсить самостоятельно :)
+            depart_names, sample_numbers, values, registry_id = list(), list(), list(), list()
+            for processed_concurrent in res:
+                sample = processed_concurrent.result().json()
+                for sampleRegister in sample['sampleRegistries']:
+                    depart_names.append(sampleRegister['sample']['user']['depart']['depart_name'])
+                    sample_numbers.append(sampleRegister['sample']['sample']['sample_number'])
+                    values.append(sampleRegister['sample']['formValue']['sample_name']['value'])
+                    registry_id.append(sampleRegister['registry_id'])
+            # должна получиться таблица с реестрами
+            csv = pd.DataFrame(
+                data={'registry_id': registry_id, 'depart_name': depart_names,
+                      'sample_number': sample_numbers, 'value': values})
+            # сохраняем не через функцию из common, чтобы не нагромождать код зря
+            csv.to_csv(path_registry_table, index=False, encoding="utf-8")
+        else:
+            raise AssertionError(f"Could not request registries list: {registries_list.status_code}:" +
+                                 f" {registries_list.text}")
+    except Exception as e:
+        response['payload'] = str(e)
+    else:
+        # если все прошло успешно, то возвращаем таблицу с реестром
+        response['success'] = True
+        response['payload'] = csv
+
+    return response
+
+
 def read_all_registry_info(table_path: str) -> dict:
     """
     Считывание и проверка наименований столбцов таблицы, содержащей полную информацию о всех доступных реестрах.
