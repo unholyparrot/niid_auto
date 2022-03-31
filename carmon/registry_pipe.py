@@ -16,9 +16,6 @@ from . import common
 REGISTRY_PIPE_SETTINGS = common.load_config(f"{common.WORKING_PATH}/registry_pipe_settings.yaml")
 
 
-# TODO: table_2 -- проверка уникальности 'Sample_name', иначе AssertionError
-# TODO: table_3 -- проверка уникальности 'litech_barcode', иначе AssertionError
-# TODO: table_3 -- проверка уникальности 'litech_sample_name', иначе уведомление в статусе и остановка обработки образца
 def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> dict:
     """
     Функция для загрузки в память входных таблиц, с которыми ведется работа.
@@ -35,6 +32,9 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
         df2 = pd.read_csv(table_2_path,
                           sep=separator, dtype=str, encoding="utf-8",
                           names=REGISTRY_PIPE_SETTINGS["column_names"]["from_2"])
+        if any(df2["Sample_name"].duplicated()):
+            raise AssertionError(f"Дублирующиеся 'Sample_name': " +
+                                 f"{', '.join(df2[df2['Sample_name'].duplicated()]['Sample_name'].tolist())}")
         # создаем баркоды
         barcodes = df2["Dispence_to"].apply(lambda x: f"{x}" if len(x) > 1 else f"0{x}")
         # и словарь соответствий баркода штрихкоду Литеха
@@ -42,6 +42,9 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
         df3 = pd.read_csv(table_3_path,
                           sep=separator, dtype=str, encoding="utf-8",
                           names=REGISTRY_PIPE_SETTINGS["column_names"]["from_3"])
+        if any(df3["litech_barcode"].duplicated()):
+            raise AssertionError(f"Дублирующиеся 'litech_barcode': " +
+                                 f"{', '.join(df3[df3['litech_barcode'].duplicated()]['litech_barcode'].tolist())}")
         df_res = df3[df3["litech_barcode"].isin(df2["Sample_name"])].copy(deep=True)
     except Exception as e:
         response['payload'] = str(e)
@@ -196,6 +199,7 @@ def append_desired_columns(df: pd.DataFrame) -> dict:
     return response
 
 
+# TODO: table_3 -- проверка уникальности 'litech_sample_name', иначе уведомление в статусе и остановка обработки образца
 # TODO: обновить алгоритм угадывания реестра в соответствии с предположениями в столбце 'litech_registry_guess'
 def process_table_concatenation(df: pd.DataFrame, df_registry: pd.DataFrame) -> dict:
     """
