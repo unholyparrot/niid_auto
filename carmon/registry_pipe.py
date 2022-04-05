@@ -6,9 +6,11 @@
 NB: все функции, производящие манипуляции с DataFrame, делают их inplace, то есть возвращаются не копии.
 """
 import concurrent.futures
+import re
 
 import pandas as pd
 import requests
+import transliterate
 
 from . import common
 
@@ -63,7 +65,8 @@ def read_input_tables(table_2_path: str, table_3_path: str, separator='\t') -> d
                 response['payload'] = df_res
         # уведомляем пользователя о несовпадении числа образцов
         else:
-            response['payload'] = "Не совпадает число образцов в плашке и число найденных образцов в таблице образцов"
+            response['payload'] = f"Не совпадает число образцов в плашке и число найденных " \
+                                  f"образцов в таблице образцов: {df_res.shape[0]} != {df2.shape[0]}"
 
     return response
 
@@ -199,8 +202,56 @@ def append_desired_columns(df: pd.DataFrame) -> dict:
     return response
 
 
+def old_fashion_search(row, target_reg_df):
+    """
+    Функция для поиска номера реестра среди всех переданных реестров на основе наивного поиска подстроки в строке,
+    приводит текстовое обозначение степени уверенности в корректном результате. \n \n
+    :param row: строка, содержащая информацию по образце, в прошлом -- строка целой таблицы TABLE;
+    :param target_reg_df: выборка таблицы с реестрами
+    :return: pd.Series  -- результат поиска реестра
+    """
+    search_table = target_reg_df[target_reg_df['value'].apply(lambda x: row['litech_sample_name'] in x.lower()).tolist()]
+    overlaps = search_table.shape[0]
+    # начинаем сверку
+    # если не найдено точных совпадений, проверим окончание на указанное значение
+    if overlaps == 0:
+        row['registry_guess_status'] = "NO MATHCES"
+    # если найдено одно точное, то проверяем совпадение региона
+    elif overlaps == 1:
+        as_series = search_table.squeeze(axis=0)
+        # если регион совпадает, то все пишем в порядке
+        if as_series['sample_number'][:4] == row['region_short_name']:
+            row[['registry_id', 'depart_name', 'sample_number', 'sample_name_value']] = as_series.tolist()
+            if row['litech_sample_name'] == row['sample_name_value'].lower():
+                row['registry_guess_status'] = "OK"
+            else:
+                row['registry_guess_status'] = "ALMOST OK"
+        # в противном случае пишем об ошибке
+        else:
+            row['registry_guess_status'] = "REGION DOES NOT MATCH"
+    # если обнаружено более двух совпадений, то нужно поискать совпадение региона
+    else:
+        sub_search_table = search_table[
+            search_table['sample_number'].apply(lambda x: x[:4] == row['region_short_name']).tolist()]
+        sub_overlaps = sub_search_table.shape[0]
+        # если после уточнения региона записей нет, то что-то не так
+        if sub_overlaps == 0:
+            row['registry_guess_status'] = "NAME MATCHES BUT REGION DOES NOT"
+        # если после уточнения региона осталась лишь одна запись, то все в порядке
+        elif sub_overlaps == 1:
+            row[['registry_id', 'depart_name',
+                 'sample_number', 'sample_name_value']] = sub_search_table.squeeze(axis=0).tolist()
+            if row['litech_sample_name'] == row['sample_name_value'].lower():
+                row['registry_guess_status'] = "OK"
+            else:
+                row['registry_guess_status'] = "ALMOST OK"
+        # если после уточнения региона записей больше одной, то сообщаем о дубликате
+        else:
+            row['registry_guess_status'] = "NAME AND REGION DUPLICATES"
+    return row
+
+
 # TODO: table_3 -- проверка уникальности 'litech_sample_name', иначе уведомление в статусе и остановка обработки образца
-# TODO: обновить алгоритм угадывания реестра в соответствии с предположениями в столбце 'litech_registry_guess'
 def process_table_concatenation(df: pd.DataFrame, df_registry: pd.DataFrame) -> dict:
     """
     Функция для поиска номера реестра среди всех реестров на основе наивного поиска подстроки в строке,
@@ -211,49 +262,48 @@ def process_table_concatenation(df: pd.DataFrame, df_registry: pd.DataFrame) -> 
     """
     response = common.DEFAULT_RESPONSE.copy()
     try:
-        # здесь было бы хорошо добавить tqdm для оценки времени работы, но, так как это будет импортироваться,
-        # я не хочу загрязнять потенциальные логи чужой консоли, обойдемся без индикатора прогресса
-        # итерируемся по строкам таблицы
-        for idx, row in df.iterrows():
-            # проверяем наличие имени от Литеха в имени образца реестра
-            search_table = df_registry[df_registry['value'].apply(lambda x: row['litech_sample_name'] in x).tolist()]
-            overlaps = search_table.shape[0]
-            # начинаем сверку
-            # если не найдено точных совпадений, проверим окончание на указанное значение
-            if overlaps == 0:
-                row['registry_guess_status'] = "NO MATHCES"
-            # если найдено одно точное, то проверяем совпадение региона
-            elif overlaps == 1:
-                as_series = search_table.squeeze(axis=0)
-                # если регион совпадает, то все пишем в порядке
-                if as_series['sample_number'][:4] == row['region_short_name']:
-                    row[['registry_id', 'depart_name', 'sample_number', 'sample_name_value']] = as_series.tolist()
-                    if row['litech_sample_name'] == row['sample_name_value']:
-                        row['registry_guess_status'] = "OK"
-                    else:
-                        row['registry_guess_status'] = "ALMOST OK"
-                # в противном случае пишем об ошибке
+        transform_func = lambda x: transliterate.translit(x, reversed=True).lower() if bool(
+            re.search('[а-яА-Я]', x)) else x.lower()
+
+        for barcode in df.index:
+            standard_go = False  # флаг для инициации старого поиска
+
+            # создаем поисковое имя, которое представляет преобразованное имя Литеха,
+            # а именно -- без капитализации, без кириллицы и тд
+            litech_clear_name = transform_func(df.loc[barcode, 'litech_sample_name'])
+            # создаем поисковую клон-строку 
+            row_clone = df.loc[barcode].copy(deep=True)
+            row_clone['litech_sample_name'] = litech_clear_name  # присваиваем ей обработанное имя Литеха образца
+
+            # обрабатываем предположение о реестре -- заменяем запятые на ';', избавляемся от любых букв и пробельных символов
+            initial_guess_string = re.sub("[\s\D]+", "", re.sub(",", ";", df.loc[barcode, 'litech_registry_guess']))
+            # сплитим такую строку по ';', извлекая подходящие нам id реестров
+            sub_regs = df_registry[df_registry['registry_id'].isin(initial_guess_string.split(";"))]  # выделение
+            # анализируем получившуюся выборку реестров
+            if sub_regs.shape[0] != 0:
+                # инициализируем поиск по выборке, передавая копию (!) клона и выборку
+                ocd_res = old_fashion_search(row_clone.copy(deep=True), sub_regs)
+                if (ocd_res['registry_guess_status'] == "OK") or (ocd_res['registry_guess_status'] == "ALMOST OK"):
+                    # если отработало корректно, то получаем информацию из измененной копии клон-строки
+                    df.loc[barcode, ['registry_id', 'depart_name', 'sample_number', 'sample_name_value',
+                                     'registry_guess_status']] = ocd_res[
+                                    ['registry_id', 'depart_name', 'sample_number', 'sample_name_value',
+                                     'registry_guess_status']]
                 else:
-                    row['registry_guess_status'] = "REGION DOES NOT MATCH"
-            # если обнаружено более двух совпадений, то нужно поискать совпадение региона
+                    standard_go = True
             else:
-                sub_search_table = search_table[
-                    search_table['sample_number'].apply(lambda x: x[:4] == row['region_short_name']).tolist()]
-                sub_overlaps = sub_search_table.shape[0]
-                # если после уточнения региона записей нет, то что-то не так
-                if sub_overlaps == 0:
-                    row['registry_guess_status'] = "NAME MATCHES BUT REGION DOES NOT"
-                # если после уточнения региона осталась лишь одна запись, то все в порядке
-                elif sub_overlaps == 1:
-                    row[['registry_id', 'depart_name',
-                         'sample_number', 'sample_name_value']] = sub_search_table.squeeze(axis=0).tolist()
-                    if row['litech_sample_name'] == row['sample_name_value']:
-                        row['registry_guess_status'] = "OK"
-                    else:
-                        row['registry_guess_status'] = "ALMOST OK"
-                # если после уточнения региона записей больше одной, то сообщаем о дубликате
-                else:
-                    row['registry_guess_status'] = "NAME AND REGION DUPLICATES"
+                # если выборка пуста, то передаем флаг прогона через стандартный алгоритм
+                standard_go = True
+            # если мы добрались аж сюда, то значит предварительная догадка о реестре не привела к результатам
+            if standard_go:
+                # если код добрался сюда, то передавать измененную клон-строку нельзя, именно поэтому
+                # ранее использовалась deep копия строки!
+                ocd_res = old_fashion_search(row_clone.copy(deep=True), df_registry)
+                # тут уже, как бы не отработало, сохраняем в результаты
+                df.loc[barcode, ['registry_id', 'depart_name', 'sample_number', 'sample_name_value',
+                                 'registry_guess_status']] = ocd_res[
+                                ['registry_id', 'depart_name', 'sample_number', 'sample_name_value',
+                                 'registry_guess_status']]
     # здесь мало представляю, как может появиться Exception, но все же...
     except Exception as e:
         response['payload'] = str(e)
