@@ -8,3 +8,6 @@ test_data/
 *.zip
 *.7z
 dev_notebook.ipynb
+example_registry_pipe.ipynb
+example_sample_status_pipe.ipynb
+example_conclusion_pipe.ipynb

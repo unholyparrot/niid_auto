@@ -1,6 +1,9 @@
 """
 Здесь предполагается размещение общих для всех компонентов констант
 """
+import os
+import shutil
+
 import yaml
 import requests
 import pandas as pd
@@ -33,6 +36,8 @@ def read_df(table_path: str, separator="\t") -> dict:
         df = pd.read_csv(table_path,
                          sep=separator, dtype=str,
                          keep_default_na=False, encoding="utf-8").set_index('barcode')
+        # увы, но один из элементов таблицы очень неудобно воспринимать как строку
+        df['valid_seq'] = df['valid_seq'].apply(lambda x: True if x == 'True' else False)
     except Exception as e:
         response['payload'] = str(e)
     else:
@@ -89,3 +94,13 @@ def state_token(token) -> dict:
             response['payload'] = f"Токен не подходит: {test_request.text}"
 
     return response
+
+
+def make_archive(source, destination):
+    base = os.path.basename(destination)
+    name = base.split('.')[0]
+    ch_format = base.split('.')[1]
+    archive_from = os.path.dirname(source)
+    archive_to = os.path.basename(source.strip(os.sep))
+    shutil.make_archive(name, ch_format, archive_from, archive_to)
+    shutil.move('%s.%s' % (name, ch_format), destination)

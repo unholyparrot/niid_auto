@@ -1,8 +1,13 @@
 """
 Раздел, отвечающий за проставление статуса результатам
 """
+import os
 import base64
 import json
+import shutil
+import textwrap
+import tempfile
+import datetime
 
 import pandas as pd
 import requests
@@ -146,13 +151,21 @@ def request_samples_info(df: pd.DataFrame, increment: int = 40):
     return response
 
 
-def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict) -> dict:
+def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict, archive_path: str) -> dict:
     """
     Загрузка сиквенсов на сервер. Выбирает из TABLE те записи, для которых локальный статус выставлен
     'Готов'. Не совершает никаких действий с теми образцами, что имеют иные статусы. \n \n
+    :param df:
+    :param fasta_upload:
+    :param credentials:
+    :param archive_path:
     :return:
     """
     response = common.DEFAULT_RESPONSE.copy()
+
+    tmp_fasta_path = tempfile.mkdtemp()
+    ts_mark = datetime.datetime.now()
+
     token = base64.b64encode(f"{credentials['login']}:{credentials['password']}".encode()).decode()
     special_headers = {
         "Authorization": f"Basic {token}",
@@ -163,6 +176,7 @@ def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict) ->
         if df.loc[barcode, 'sample_status_local'] == 'Готов':
             try:
                 # тут, вообще говоря, надо подумать, как все красиво спихнуть в конфигурацию
+                beautiful_fasta = "\n".join(textwrap.wrap(fasta_upload.get(barcode), 60))
                 single_sample = {
                     'sample_number': df.loc[barcode, 'sample_number'],
                     'sample_data': {
@@ -176,7 +190,7 @@ def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict) ->
                         'valid': True,
                         'seq_id': df.loc[barcode, 'sample_name_value']  # опциональный параметр
                     },
-                    'sequence': f">DEZIN-{df.loc[barcode, 'litech_barcode']}\n{fasta_upload.get(barcode)}"
+                    'sequence': f">DEZIN-{df.loc[barcode, 'litech_barcode']}\n{beautiful_fasta}"
                 }
                 single_upload = requests.post(common.BASE_URL + SAMPLE_STATUS_DICT["paths"]["upload"],
                                               headers=special_headers,
@@ -191,6 +205,18 @@ def upload_sequences(df: pd.DataFrame, fasta_upload: dict, credentials: dict) ->
             except Exception as e:
                 df.loc[barcode, 'sample_status_remote'] = f"Failed with {str(e)}"
                 operation_status = False
+            else:
+                with open(os.path.join(tmp_fasta_path, f"dezin-{df.loc[barcode, 'litech_barcode']}.fasta"), "w") as ff:
+                    ff.write(f">DEZIN-{df.loc[barcode, 'litech_barcode']}\n{beautiful_fasta}")
+
+    with open(os.path.join(tmp_fasta_path, f'{ts_mark.strftime("%y%m%d_%H%M")}_upload_report.txt'), "w") as ts_wr:
+        ts_wr.write(f"Upload start\t{ts_mark.strftime('%Y-%m-%d %H:%M')}\n")
+        ts_wr.write(f"Attempted to upload\t{df[df['sample_status_local'] == 'Готов'].shape[0]}\n")
+        ts_wr.write(f"Succeeded to upload\t{df[df['sample_status_remote'] == 'Uploaded'].shape[0]}\n")
+        ts_wr.write(f"Upload finish\t{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+
+    common.make_archive(tmp_fasta_path, archive_path)
+    shutil.rmtree(tmp_fasta_path)
 
     response['success'] = operation_status
     response['payload'] = df
@@ -252,6 +278,11 @@ def state_sample_status_remote(df: pd.DataFrame, increment: int = 40, status: st
         response['payload'] = df
 
     return response
+
+
+# TODO: добавить функцию повторной загрузки fasta-файла для уже загруженного
+def repost_sample_sequence():
+    pass
 
 
 # TODO: реализовать проверку успеха загрузки и выставления статусов

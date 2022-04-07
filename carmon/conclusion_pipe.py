@@ -62,7 +62,8 @@ def read_and_prepare_data(df: pd.DataFrame, pango_path: str, clades_path: str) -
             clades = json.load(file_read)['results']  # тут сразу берем лишь тот кусок, с которым удобно работать
         # итерируемся по результатам Pango и добавляем результаты в нашу таблицу сведением
         for idx, row in pango.iterrows():
-            df.loc[row['taxon'], 'pango'] = row['lineage']
+            if row['taxon'] in df.index:  # чтобы не набрать лишнего в таблицу
+                df.loc[row['taxon'], 'pango'] = row['lineage']
         cur_counter = df[(df['valid_seq']) & (df['pango'] == "")].shape[0]
         if cur_counter != 0:
             raise AssertionError(f"Как минимум один ({cur_counter}) из валидных образцов не получил результата Pango")
@@ -70,7 +71,8 @@ def read_and_prepare_data(df: pd.DataFrame, pango_path: str, clades_path: str) -
         # теперь проставим результаты Clades
         for row in clades:
             barcode = row['seqName'].replace(" ", "_")
-            df.loc[barcode, 'nextclade'] = row['clade']
+            if barcode in df.index:  # чтобы не набрать лишнего в таблицу
+                df.loc[barcode, 'nextclade'] = row['clade']
         cur_counter = df[(df['valid_seq']) & (df['nextclade'] == "")].shape[0]
         if cur_counter != 0:
             raise AssertionError(f"Как минимум один ({cur_counter}) из валидных образцов не получил результата Clades")
@@ -153,6 +155,7 @@ def request_samples_info(rdf: pd.DataFrame, increment: int = 40) -> dict:
             else:
                 raise AssertionError(f"Request for {idx}:{idx + increment} failed with {samples_info.status_code}")
             idx += increment
+        df = rdf[rdf['sample_status_remote'] == 'Uploaded']
         cur_counter = df[df['sequence_vga_id'] == ""].shape[0]
         if cur_counter != 0:
             raise AssertionError(f"Как минимум один ({cur_counter}) из образцов не получил id с портала")
@@ -162,7 +165,7 @@ def request_samples_info(rdf: pd.DataFrame, increment: int = 40) -> dict:
     else:
         # если все ок, то возвращаем обновленную табличку и хороший статус
         response['success'] = True
-        response['payload'] = df
+        response['payload'] = rdf
 
     return response
 
@@ -179,10 +182,10 @@ def state_conclusion_remote(rdf: pd.DataFrame, increment: int = 40) -> dict:
         df = rdf[rdf['sample_status_remote'] == 'Uploaded']
         unique_results = df['sequence_conclusion_local'].unique()
         for result_var in unique_results:
-            sub_df = df[df['result'] == result_var]
+            sub_df = df[df['sequence_conclusion_local'] == result_var]
             if result_var != "NS":
                 # делаем выборку DataFrame
-                ids_list = sub_df['true_id'].to_list()
+                ids_list = sub_df['sequence_vga_id'].to_list()
                 # итерационно перебираем для выставления результата
                 idx = 0
                 while idx < len(ids_list):
@@ -207,7 +210,7 @@ def state_conclusion_remote(rdf: pd.DataFrame, increment: int = 40) -> dict:
     else:
         # если все ок, то возвращаем обновленную табличку и хороший статус
         response['success'] = True
-        response['payload'] = df
+        response['payload'] = rdf
 
     return response
 
